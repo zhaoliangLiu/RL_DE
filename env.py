@@ -1,6 +1,14 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from stable_baselines3 import PPO  # 导入 PPO
+from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+from gymnasium import spaces
 import gym
 import numpy as np
-from gym import spaces 
+from gym import spaces
 import scipy.stats as stats
 from opfunu import cec_based
 import torch
@@ -51,7 +59,7 @@ class PSO_Proportional_Env(gym.Env):
         self.fitness_function_id = start_function_id
         self.num_function = num_function
         self.func_mapping = self._create_func_mapping()
-        self.reset(is_test=True)
+        self.reset()
 
     def _create_func_mapping(self):
         """与原始env完全一致的函数映射"""
@@ -74,25 +82,18 @@ class PSO_Proportional_Env(gym.Env):
             29: cec_based.F292017
         }
 
-    def reset(self, is_test=False):
+    def reset(self):
         # 与原始env完全一致的初始化逻辑
         func_class = self.func_mapping[self.fitness_function_id]
         self.fitness_function = func_class(ndim=self.dim)
-        if not is_test:
-            # 修改取模逻辑避免出现0值
-            self.fitness_function_id += 1  # 确保ID在1-29之间
-            if self.fitness_function_id > 29:
-                self.fitness_function_id = 1
-
-
-
+ 
         self.population = np.random.uniform(
             self.x_min, self.x_max,
             (self.population_size, self.dim)
         )
         
         self.fitness = np.array([self.fitness_function.evaluate(x) for x in self.population])
-        
+        # self.fitness -= (self.fitness_function_id) * 100  # 适应度偏移
         self.pbest_positions = self.population.copy()
         self.pbest_fitness = self.fitness.copy()
         self.gbest_idx = np.argmin(self.fitness)
@@ -116,7 +117,7 @@ class PSO_Proportional_Env(gym.Env):
             'fitness_history': []
         }
         
-
+        self.p_count = 0
         return self._get_full_state()
 
     def _get_full_state(self):
@@ -124,15 +125,16 @@ class PSO_Proportional_Env(gym.Env):
         center = np.mean(self.population, axis=0)
         dist_center = np.linalg.norm(self.population - center, axis=1)
         dist_gbest = np.linalg.norm(self.population - self.gbest_position, axis=1)
-        
+        if self.gbest_fitness < 0:
+            print(self.gbest_fitness)
         features = np.array([
-            np.log(1 + self.gbest_fitness),
+            np.log(1 + np.abs(self.gbest_fitness)),
             np.log(1 + np.mean(self.fitness)),
             np.log(1 + np.std(self.fitness)),
             np.log(1 + abs(self.gbest_fitness_old - self.gbest_fitness)),
             np.log(1 + np.sum(dist_center)),
             np.log(1 + np.sum(dist_gbest)),
-            self.not_update_count / 10.0,
+            self.not_update_count ,
             self.cur_iter / self.max_iter
         ], dtype=np.float32)
         
@@ -140,46 +142,59 @@ class PSO_Proportional_Env(gym.Env):
         return features
 
     def _vectorized_mutation(self, p):
-        # 修改后的p值处理（移除双重索引）
-        p = np.clip(p[0] + np.random.normal(0, 0.05), 0.1, 0.9)  # 直接返回标量值
-        
-        # 按适应度排序
+        # 按适应度排序并获取分割点
         sorted_idx = np.argsort(self.fitness)
-        split_idx = int(self.population_size * p)
+        split_idx = int(self.population_size * p[0])
         
-        # 生成参数（与原始env相同）
+        # 生成参数
         r = np.random.randint(0, self.memory_size, self.population_size)
         CR = np.clip(stats.norm(loc=self.M_CR[r], scale=0.1).rvs(), 0, 1)
         F = np.clip(stats.cauchy(loc=self.M_F[r], scale=0.1).rvs(), 0, 1)
         
-        # 预生成随机索引
-        rand_idx = np.array([self._get_rand_indices(i) for i in range(self.population_size)])
+        # 为所有个体预生成随机索引矩阵 (population_size x 3)
+        rand_indices = np.array([self._get_rand_indices(i) for i in range(self.population_size)])
         
-        # 前p%使用DE/best/1，其余使用DE/rand/1
+        # 创建变异向量
         mutants = np.empty_like(self.population)
-        for i in range(self.population_size):
-            if i < split_idx:  # 开发策略
-                r1, r2 = rand_idx[i, 0], rand_idx[i, 1]
-                mutants[i] = self.gbest_position + F[i] * (self.population[r1] - self.population[r2])
-            else:  # 勘探策略
-                r1, r2, r3 = rand_idx[i, 0], rand_idx[i, 1], rand_idx[i, 2]
-                mutants[i] = self.population[r1] + F[i] * (self.population[r2] - self.population[r3])
         
-        # 交叉与选择逻辑保持相同
-        cross_mask = np.random.rand(*mutants.shape) < CR[:, None]
-        cross_mask |= (np.arange(self.dim) == np.random.randint(self.dim))[None, :]
+        # 向量化实现 DE/best/1 策略 (前p%个体)
+        if split_idx > 0:
+            best_individuals = sorted_idx[:split_idx]
+            r1 = rand_indices[best_individuals, 0]
+            r2 = rand_indices[best_individuals, 1]
+            F_best = F[best_individuals, np.newaxis]
+            #  
+            mutants[best_individuals] = self.population[best_individuals] + F_best * (
+                self.population[r1] - self.population[r2]
+            )
+        
+        # 向量化实现 DE/rand/1 策略 (剩余个体)
+        if split_idx < self.population_size:
+            rand_individuals = sorted_idx[split_idx:]
+            r1 = rand_indices[rand_individuals, 0]
+            r2 = rand_indices[rand_individuals, 1]
+            r3 = rand_indices[rand_individuals, 2]
+            F_rand = F[rand_individuals, np.newaxis]
+            mutants[rand_individuals] = self.population[r1] + F_rand * (
+                self.population[r2] - self.population[r3]
+            )
+
+        # 向量化交叉操作
+        cross_mask = np.random.rand(*mutants.shape) < CR[:, np.newaxis]
+        cross_mask |= np.arange(self.dim) == np.random.randint(self.dim, size=self.population_size)[:, np.newaxis]
         trials = np.where(cross_mask, mutants, self.population)
-        
+    
         return np.clip(trials, self.x_min, self.x_max), F, CR
+
 
     def _get_rand_indices(self, idx):
         # 与原始env相同的随机索引生成
         candidates = np.setdiff1d(np.arange(self.population_size), idx)
         return np.random.choice(candidates, 3, replace=False)
 
-    def _vectorized_evaluate(self, positions):
-        # 向量化计算适应度
-        return np.array([self.fitness_function.evaluate(x) for x in positions])
+    # def _vectorized_evaluate(self, positions):
+    #     # 向量化计算适应度
+    #     return np.array([self.fitness_function.evaluate(x) for x in positions])
 
     def update_particles(self, action):
         trials, F, CR = self._vectorized_mutation(action)
@@ -192,6 +207,7 @@ class PSO_Proportional_Env(gym.Env):
         for i in range(self.population_size):
             # 评估当前个体
             trial_fitness = self.fitness_function.evaluate(trials[i])
+            # trial_fitness -= (self.fitness_function_id) * 100 # 适应度偏移
             
             # 如果当前个体更优，更新种群和适应度
             if trial_fitness < self.fitness[i]:
@@ -221,35 +237,49 @@ class PSO_Proportional_Env(gym.Env):
                 
         return np.array(intermediate_fitness)
 
-    def step(self, action):
+    def step(self, action, is_test=False):
+
+        # 记录边界p个数
+        if action[0] < 0.1 or action[0] > 0.9: 
+            self.p_count += 1
+
         old_gbest = self.gbest_fitness
         self.fitness_old = self.fitness.copy()
         
         # 获取每次评估后的适应度变化
         intermediate_fitness = self.update_particles(action)
-        
-        improved = self.fitness < self.fitness_old
-        self.survival = np.where(improved, 1, self.survival + 1)
 
-        if np.any(improved):
-            cep = np.mean(1.0 / self.survival[improved])
-        else:
-            cep = 0.0
+        # 使用余弦插值实现平滑过渡
+        progress = self.cur_iter / self.max_iter
+        fitness_weight = (1 - np.cos(np.pi * progress)) / 2.0
+        diversity_weight = 1 - fitness_weight
+         
 
+        # 计算多样性指标（保持原有熵计算）
         entropy = stats.entropy(np.histogram(self.population, bins=20)[0])
-        reward = 10 * cep + 0.1 * np.log1p(entropy)
-                
-        if self.gbest_fitness < old_gbest:
-            reward += np.log1p(old_gbest - self.gbest_fitness)
+
+        # 计算适应度相对奖励
+        fitness_reward = (old_gbest - self.gbest_fitness) / (old_gbest + 1e-8)
+
+        reward = fitness_weight * fitness_reward + diversity_weight * entropy
+
+
+        if self.gbest_fitness < old_gbest: 
             self.not_update_count = 0
         else:
             self.not_update_count += 1
             
         self.cur_iter += 1
         done = self.cur_iter >= self.max_iter
-        if done:
-            reward += 50 * np.log1p(1.0 / (self.gbest_fitness + 1e-8))
+        if not is_test and self.gbest_fitness == 0:
+            done = True
+            reward += 10
+        if done: 
+            print(f"Function ID: {self.fitness_function_id}, Best Fitness: {self.gbest_fitness}, p_count: {self.p_count}")
+            if not is_test:
+                self.fitness_function_id = (self.fitness_function_id) % 29 + 1
         
+
         # 更新info信息，现在包含中间适应度变化
         self.info["fitness"] = intermediate_fitness  # 改为数组形式
         self.info["fitness_history"].append(self.gbest_fitness)
@@ -265,6 +295,8 @@ class PSO_Proportional_Env(gym.Env):
         np.random.seed(seed)
         return [seed]
 
+
+
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
     import matplotlib as mpl
@@ -274,14 +306,16 @@ if __name__ == "__main__":
     plt.rcParams['font.family'] = 'Times New Roman'
     plt.rcParams['axes.linewidth'] = 1.5
     
-    dim = 10
+    dim = 30
     max_iter = 2000
-    func_id = 10
+    func_id = 29 
     
     env = PSO_Proportional_Env(dim=dim, max_iter=max_iter, start_function_id=func_id)
     
     strategies = {
-        '固定比例策略(p=0.5)': [0.5]
+        '固定比例策略(p=0.5)': [0.5],
+        '固定比例策略(p=0)': [0],
+        '固定比例策略(p=1)': [1],
     }
     
     results = {}
@@ -289,16 +323,14 @@ if __name__ == "__main__":
     
     for name, action in strategies.items():
         print(f"Testing {name}...")
-        env.reset(is_test=True)
+        env.reset()
         history = []
         fes_history = []
         
         for _ in range(max_iter):
-            _, _, done, info = env.step(action)
+            _, _, done, info = env.step(action, is_test=True)
             history.append(env.gbest_fitness)
-            fes_history.extend(info['fitness'])
-            if done: 
-                break
+            fes_history.extend(info['fitness']) 
                 
         results[name] = history
         fes_results[name] = fes_history
@@ -308,12 +340,15 @@ if __name__ == "__main__":
     # FES收敛图
     plt.figure(1,figsize=(8, 6), dpi=150)
     for name, data in fes_results.items():
-        plt.semilogy(data, color='#C82423', linewidth=2, alpha=0.8)
+        plt.semilogy(data, linewidth=2, alpha=0.8, label=name)
+        # plt.semilogy(data, color='#C82423', linewidth=2, alpha=0.8)
+
     plt.xlabel('fps', fontsize=12, fontweight='bold')
     plt.ylabel('Fitness Value', fontsize=12, fontweight='bold')
     plt.title('Convergence fps', 
               fontsize=12, fontweight='bold', pad=20)
     plt.grid(True, linestyle='--', alpha=0.3)
     plt.tight_layout()
+    plt.legend(loc='upper right')
     print(f'fitness_id: {func_id}, dim = {dim}, gbest_fitness: {env.gbest_fitness}')
     plt.show()

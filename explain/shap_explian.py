@@ -9,7 +9,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.
 
 
 # 加载模型并提取策略网络
-model = PPO.load("ea_ppo_model")
+model = PPO.load("ppo_ea_model_v3")
 policy_net = model.policy
 
 def model_wrapper(X):
@@ -30,7 +30,7 @@ def preprocess_data(data_path):
     
     df = pd.read_csv(data_path)
     # 随机1000个样本
-    df = df.sample(n=50, random_state=43)
+    df = df.sample(n=5000, random_state=43)
     features = df.drop(columns=['action'])
     scaler = StandardScaler()
     scaled_features = scaler.fit_transform(features)
@@ -49,11 +49,11 @@ def shap_analysis():
     BLUE = '#2878B5'  # 主要蓝色
     RED = '#C82423'   # 主要红色
      
-    dim = [10, 30, 50, 100]
+    dim = [10]
 
     for j, path in enumerate(dim):
         # 加载预处理数据
-        X, feature_names, scaler = preprocess_data(f'data/explain/{path}D_explain_data.csv')
+        X, feature_names, scaler = preprocess_data(f'data/explain_v3/{path}D_explain_data.csv')
         
         # 初始化解释器
         explainer = shap.KernelExplainer(
@@ -80,9 +80,9 @@ def shap_analysis():
         plt.ylabel("Feature", fontsize=12, fontweight='bold')
         plt.tight_layout()
         # 如果不存在
-        if not os.path.exists(f'graph/explain/{path}D'):
-            os.makedirs(f'graph/explain/{path}D')
-        plt.savefig(f'graph/explain/{path}D/{path}D_global_importance.png', 
+        if not os.path.exists(f'graph/explain_v3/{path}D'):
+            os.makedirs(f'graph/explain_v3/{path}D')
+        plt.savefig(f'graph/explain_v3/{path}D/{path}D_global_importance.png', 
                     dpi=300, bbox_inches='tight')
         plt.close()
 
@@ -122,7 +122,7 @@ def shap_analysis():
             
             plt.grid(True, linestyle='--', alpha=0.3)
             plt.tight_layout()
-            plt.savefig(f'graph/explain/{path}D/{path}D_dependence_{feature}.png', 
+            plt.savefig(f'graph/explain_v3/{path}D/{path}D_dependence_{feature}.png', 
                        dpi=300, bbox_inches='tight')
             plt.close()
 
@@ -141,7 +141,7 @@ def shap_analysis():
         plt.xlabel("mean(|SHAP value|)", fontsize=12, fontweight='bold')
         plt.ylabel("Feature", fontsize=12, fontweight='bold')
         plt.tight_layout()
-        plt.savefig(f'graph/explain/{path}D/{path}D_importance_ranking.png', 
+        plt.savefig(f'graph/explain_v3/{path}D/{path}D_importance_ranking.png', 
                     dpi=300, bbox_inches='tight')
         plt.close()
 
