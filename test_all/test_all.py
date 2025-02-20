@@ -1,3 +1,4 @@
+# test_all.py
 import os
 import sys
 import numpy as np
@@ -8,95 +9,96 @@ import itertools
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
 
-# 将父目录加入
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir)))
 
 from env import PSO_Proportional_Env
 from other_ea.other_ea import unified_optimization
+import config # 导入配置文件
 
-# 设置新罗马字体
 rcParams['font.family'] = 'Times New Roman'
 
-# 修改配置参数
-DIM = 10
-REPEAT = 30  # 增加到50次
-FUNC_IDS = range(1, 30)
-# ALGORITHMS = ["rl", "de", "jade", "lshade", "shade"]
-ALGORITHMS = ["rl"]
+DIM = config.DIM_TEST # 使用配置文件中的测试维度
+REPEAT = config.REPEAT_TEST # 使用配置文件中的重复次数
+FUNC_IDS = config.FUNC_IDS_TEST # 使用配置文件中的函数ID列表
+ALGORITHMS = config.ALGORITHM_NAMES # 包含所有要测试的算法
 
-N_PROCESSES = cpu_count()   
- 
+N_PROCESSES = cpu_count()
+
 try:
     set_start_method("spawn", force=True)
 except RuntimeError:
-    pass  
+    pass
 
-# 预加载函数避免重复初始化
 def init_worker():
     global GLOBAL_RL_MODEL
-    GLOBAL_RL_MODEL = PPO.load("ppo_ea_model_v3")
+    GLOBAL_RL_MODEL = PPO.load(config.MODEL_PATH) # 使用配置文件中的模型路径
 
-# 维度配置（与RL环境一致）
-DIM_CONFIG = {
-    10: {'pop_size': 50, 'max_eval': 10*10000},
-    30: {'pop_size': 100, 'max_eval': 30*10000},
-    50: {'pop_size': 150, 'max_eval': 50*10000},
-    100: {'pop_size': 200, 'max_eval': 100*10000}
-}
+DIM_CONFIG = config.DIM_CONFIG # 使用配置文件中的维度配置
 
 def run_rl_optimization(func_id, dim, run_id):
-    """运行RL-DE优化并返回历史记录"""
     cfg = DIM_CONFIG[dim]
     env = PSO_Proportional_Env(
         dim=dim,
         population_size=cfg['pop_size'],
-        max_iter=cfg['max_eval'] // cfg['pop_size'],
+        max_iter=config.MAX_ITERATIONS, # 使用配置文件中的最大迭代次数`,
         num_function=1,
         start_function_id=func_id
     )
-    
+
     obs = env._get_full_state()
     fitness_history = []
-    model = PPO.load("ppo_ea_model_v3")
-    
+    model = PPO.load(config.MODEL_PATH) # 使用配置文件中的模型路径
+
     for _ in range(env.max_iter):
         action, _ = model.predict(obs, deterministic=True)
         obs, _, done, info = env.step(action, is_test=True)
         fitness_history.extend(info["fitness"])
         if done: break
-    
+
     return env.gbest_fitness, fitness_history
 
 def run_other_optimization(algorithm, func_id, dim):
-    """运行其他优化算法并返回历史记录"""
     _, fitness, history = unified_optimization(
         dim=dim,
         algorithm_name=algorithm,
         fitness_function_id=func_id,
-        max_evals=DIM_CONFIG[dim]['max_eval']
+        max_evals=DIM_CONFIG[dim]['max_eval'] # 使用配置文件中的 max_evals
     )
     return fitness, history
 
 def process_function(func_id):
-    """处理单个函数的所有实验并保存为单行格式""" 
-    # 如果不存在目录
-    result_dir = f"data/compare/{DIM}D"
+    result_dir = os.path.join(config.COMPARE_DATA_DIR, f"{DIM}D")
     if not os.path.exists(result_dir):
         os.makedirs(result_dir)
-    
-    csv_path = os.path.join(result_dir, "原始数据v3.csv")
-    if os.path.exists(csv_path):
-        try:
-            existing_df = pd.read_csv(csv_path)
-        except pd.errors.EmptyDataError:
-            print(f"Warning: {csv_path} is empty. Overwriting.")
-    else:
-        existing_df = pd.DataFrame()
 
+    csv_path = os.path.join(result_dir, f"原始数据{config.PATH_EXPLOIT_DEV}.csv")
+    
     # Initialize results dictionary
     results = {algo: {'fitness': [], 'history': []} for algo in ALGORITHMS}
+    
+    # Handle file reading and initialization
+    if func_id == min(FUNC_IDS):
+        # For the first function, create empty DataFrame with columns
+        columns = ['Function']
+        for algo in ALGORITHMS:
+            prefix = 'rlde' if algo == 'rl' else algo
+            for stat in ['best', 'worst', 'mean', 'std', 'median']:
+                columns.append(f'{prefix}_{stat}')
+        existing_df = pd.DataFrame(columns=columns)
+        existing_df.to_csv(csv_path, index=False)
+    else:
+        try:
+            existing_df = pd.read_csv(csv_path)
+        except (pd.errors.EmptyDataError, FileNotFoundError):
+            # If file is empty or doesn't exist, create new DataFrame with columns
+            columns = ['Function']
+            for algo in ALGORITHMS:
+                prefix = 'rlde' if algo == 'rl' else algo
+                for stat in ['best', 'worst', 'mean', 'std', 'median']:
+                    columns.append(f'{prefix}_{stat}')
+            existing_df = pd.DataFrame(columns=columns)
 
-    # Run RL-DE experiments
+    # RL-DE testing
     print(f"\nProcessing F{func_id} - Running RL-DE experiments...")
     best_rl_fitness = float('inf')
     best_rl_history = None
@@ -109,11 +111,40 @@ def process_function(func_id):
             best_rl_fitness = fitness
             best_rl_history = history
 
-    # Save RL-DE convergence history
-    convergence_dir = os.path.join(result_dir, "convergence")
+    # Testing other algorithms
+    for algo in ALGORITHMS:
+        if algo != 'rl':
+            print(f"\nProcessing F{func_id} - Running {algo.upper()} experiments...")
+            algo_fitness_list = []
+            best_algo_fitness = float('inf')
+            best_algo_history = None
+
+            for run in range(REPEAT):
+                fitness, history = run_other_optimization(algo, func_id, DIM)
+                algo_fitness_list.append(fitness)
+                if fitness < best_algo_fitness:
+                    best_algo_fitness = fitness
+                    best_algo_history = history
+
+            # Save convergence history
+            convergence_dir = os.path.join(result_dir, config.CONVERGENCE_DIR_NAME)
+            if not os.path.exists(convergence_dir):
+                os.makedirs(convergence_dir)
+            np.save(os.path.join(convergence_dir, f"F{func_id}_{algo}.npy"), best_algo_history)
+
+            # Record statistics
+            results[algo] = {
+                'best': np.min(algo_fitness_list),
+                'worst': np.max(algo_fitness_list),
+                'mean': np.mean(algo_fitness_list),
+                'std': np.std(algo_fitness_list),
+                'median': np.median(algo_fitness_list)
+            }
+
+    # Save RL results
+    convergence_dir = os.path.join(result_dir, config.CONVERGENCE_DIR_NAME)
     if not os.path.exists(convergence_dir):
         os.makedirs(convergence_dir)
-
     np.save(os.path.join(convergence_dir, f"F{func_id}_rl.npy"), best_rl_history)
     results['rl'] = {
         'best': np.min(rl_fitness_list),
@@ -123,55 +154,33 @@ def process_function(func_id):
         'median': np.median(rl_fitness_list)
     }
 
-    # Run other algorithms
-    # print(f"Processing F{func_id} - Running other algorithms...")
-    # for algo in ["de", "jade", "lshade", "shade"]:
-    #     algo_fitness_list = []
-    #     for run in range(REPEAT):
-    #         fitness, history = run_other_optimization(algo, func_id, DIM)
-    #         algo_fitness_list.append(fitness)
-    #         if run == REPEAT - 1:  # Save last run's convergence
-    #             np.save(os.path.join(convergence_dir, f"F{func_id}_{algo}.npy"), history)
-
-    #     results[algo] = {
-    #         'best': np.min(algo_fitness_list),
-    #         'worst': np.max(algo_fitness_list),
-    #         'mean': np.mean(algo_fitness_list),
-    #         'std': np.std(algo_fitness_list),
-    #         'median': np.median(algo_fitness_list)
-    #     }
-
-    # Create single-row DataFrame
+    # Create new DataFrame with results and append to existing data
     row_dict = {'Function': f'F{func_id}'}
     for algo in ALGORITHMS:
         prefix = 'rlde' if algo == 'rl' else algo
         for stat in ['best', 'worst', 'mean', 'std', 'median']:
             row_dict[f'{prefix}_{stat}'] = results[algo][stat]
 
-    # Save to CSV (only if function not already processed)
     new_row_df = pd.DataFrame([row_dict])
-    if os.path.exists(csv_path) and not existing_df.empty:
-        combined_df = pd.concat([existing_df, new_row_df], ignore_index=True)
-    else:
-        combined_df = new_row_df
+    
+    # Combine with existing data and save
+    combined_df = pd.concat([existing_df, new_row_df], ignore_index=True)
     combined_df.to_csv(csv_path, index=False)
+    
     return results
 
 def main():
 
-    # 处理所有函数
     for fid in FUNC_IDS:
         result = process_function(fid)
 
     print("\nAll functions processed. Starting convergence plots...")
 
 def plot_convergence(func_id):
-    """绘制收敛曲线"""
     plt.figure(figsize=(10, 6), dpi=300)
 
-    # 加载并绘制所有算法的收敛历史
-    for algo in ['rl', 'de', 'jade', 'lshade', 'shade']:
-        history = np.load(f"data/compare/{DIM}D/convergence/F{func_id}_{algo}.npy")
+    for algo in ALGORITHMS:
+        history = np.load(os.path.join(config.COMPARE_DATA_DIR, f"{DIM}D", config.CONVERGENCE_DIR_NAME, f"F{func_id}_{algo}.npy")) # 使用配置文件中的收敛数据路径
         if algo == 'rl':
             plt.semilogy(history, 'r--', linewidth=2, label='RLPDE')
         else:
@@ -183,16 +192,18 @@ def plot_convergence(func_id):
     plt.legend(prop={'family': 'Times New Roman'})
     plt.grid(True, which='both', linestyle='--', alpha=0.5)
 
-    output_dir = f'graph/compare/{DIM}D/convergence'
+    output_dir = os.path.join(config.COMPARE_GRAPH_DIR, f"{DIM}D", config.CONVERGENCE_DIR_NAME) # 使用配置文件中的图形输出路径
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    plt.savefig(os.path.join(output_dir, f'F{func_id}.png'), bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, f'F{func_id}.png'), bbox_inches='tight') # 使用配置文件中的图形输出路径和文件名
     plt.close()
 
 if __name__ == "__main__":
+    from train_ppo import train_ppo
+    train_ppo()
     main()
-
-    # 绘制所有函数的收敛曲线
+    # 处理排名
+    import process.process_data
     print("\nGenerating convergence plots...")
     for fid in FUNC_IDS:
         plot_convergence(fid)
@@ -201,3 +212,6 @@ if __name__ == "__main__":
     from explain.shap_explian import shap_analysis
     save_data()
     shap_analysis()
+
+    from test_rl_ea import test_all
+    test_all()

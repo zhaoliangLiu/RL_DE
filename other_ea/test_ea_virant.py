@@ -1,11 +1,12 @@
+# test_ea_virant.py
 import numpy as np
 import pyade.de
 import pyade.jade
 import pyade.lshade
 import pyade.shade
 import matplotlib.pyplot as plt
+import config # 导入配置文件
 
-# You may need to install opfunu package
 try:
     from opfunu import cec_based
     USE_OPFUNU = True
@@ -13,51 +14,16 @@ except ImportError:
     print("Warning: opfunu package not found.  CEC functions will not be available.")
     USE_OPFUNU = False
 
-# func 存储函数名字
-funcs = {
-    1: "F12017", 2: "F22017",
-    3: "F32017", 4: "F42017",
-    5: "F52017", 6: "F62017",
-    7: "F72017", 8: "F82017",
-    9: "F92017", 10: "F102017",
-    11: "F112017", 12: "F122017",
-    13: "F132017", 14: "F142017",
-    15: "F152017", 16: "F162017",
-    17: "F172017", 18: "F182017",
-    19: "F192017", 20: "F202017",
-    21: "F212017", 22: "F222017",
-    23: "F232017", 24: "F242017",
-    25: "F252017", 26: "F262017",
-    27: "F272017", 28: "F282017",
-    29: "F292017"
-}
-
-algorithm_map = {
-    "de": pyade.de,
-    "jade": pyade.jade,
-    "lshade": pyade.lshade,
-    "shade": pyade.shade
-}
-
+funcs = config.FUNCS # 使用配置文件中的函数字典
+algorithm_map = config.ALGORITHM_MAP # 使用配置文件中的算法映射
+algorithm_map["de"] = pyade.de # 确保 algorithm_map 中的值正确设置，如果 config.py 中未初始化
+algorithm_map["jade"] = pyade.jade
+algorithm_map["lshade"] = pyade.lshade
+algorithm_map["shade"] = pyade.shade
 
 def unified_optimization(dim: int, algorithm_name: str, fitness_function_id: int,
                          bounds: np.ndarray = None, max_evals: int = None,
                          **kwargs) -> [np.ndarray, float, list]:
-    """
-    Unified optimization function for various differential evolution algorithms from pyade.
-
-    :param dim: Dimensionality of the problem.
-    :param algorithm_name: Name of the algorithm to use (de, jade, lshade, shade).
-    :param fitness_function_id: id of the fitness_function 1-29.
-    :param bounds: (Optional) Numpy array of shape (dim, 2) specifying the lower and upper bounds for each dimension.
-    If None, defaults to [-100, 100] for each dimension.
-    :param max_evals: (Optional) Maximum number of fitness function evaluations. If None, defaults to 10000 * dim.
-    :param kwargs:  Other keyword arguments to be passed to the selected algorithm's `apply` function.
-    :return: A tuple containing:
-    - Best solution found (NumPy array).
-    - Best fitness value (float).
-    - List of fitness history values (list of floats).
-    """
 
     if algorithm_name not in algorithm_map:
         raise ValueError(
@@ -69,49 +35,32 @@ def unified_optimization(dim: int, algorithm_name: str, fitness_function_id: int
     algorithm = algorithm_map[algorithm_name]
     params = algorithm.get_default_params(dim=dim)
 
-    # Override default parameters with function arguments
     if bounds is None:
-        params['bounds'] = np.array([[-100, 100]] * dim)  # Default bounds
+        params['bounds'] = np.array([[config.X_MIN, config.X_MAX]] * dim)  # 使用配置文件中的默认边界
     else:
         params['bounds'] = bounds
 
-    # 如果成功import cec_based包, 适应度函数使用cec_based,否则使用lambda 函数
-    
     params['func'] = cec_based.__dict__[funcs[fitness_function_id]](ndim=dim).evaluate
-    
 
     if max_evals is None:
-        params['max_evals'] = 10000 * dim
+        params['max_evals'] = config.DIM_CONFIG[dim]['max_eval'] # 使用配置文件中的 max_evals
     else:
         params['max_evals'] = max_evals
 
-    # Add any extra kwargs to params
     params.update(kwargs)
-
-    # Run the algorithm.  This try-except handles the different signatures of apply() in pyade.
-    
     solution, fitness, fitness_history = algorithm.apply(**params)
-  
 
     return solution, fitness, fitness_history
-
 
 if __name__ == '__main__':
     dim = 100
     function_id = 9
-    algorithm_names = ["de", "jade", "lshade", "shade"]  # List of algorithms to compare
+    algorithm_names = config.ALGORITHM_NAMES[1:] # 使用配置文件中的算法名称列表 (去除 'rl')
 
-    # Define colors and linestyles for each algorithm
-    algorithm_styles = {
-        "de": {"color": "blue", "linestyle": "-"},
-        "jade": {"color": "red", "linestyle": "--"},
-        "lshade": {"color": "green", "linestyle": "-."},
-        "shade": {"color": "purple", "linestyle": ":"},
-    }
+    algorithm_styles = config.ALGORITHM_STYLES # 使用配置文件中的算法样式
 
-    plt.figure(figsize=(10, 6))  # Adjust figure size for better readability
+    plt.figure(figsize=(10, 6))
 
-    # Run each algorithm and plot its fitness history
     for algorithm_name in algorithm_names:
         solution, fitness, fitness_history = unified_optimization(
             dim=dim,
@@ -123,27 +72,25 @@ if __name__ == '__main__':
         print("Solution: ", solution)
         print("Fitness value: ", fitness)
 
-        # Apply styling based on the algorithm
         style = algorithm_styles.get(algorithm_name)
         if style:
             plt.plot(fitness_history, label=algorithm_name.upper(), **style)
         else:
-            plt.plot(fitness_history, label=algorithm_name.upper())  # Default style
+            plt.plot(fitness_history, label=algorithm_name.upper())
 
-    plt.xlabel("Evaluations", fontsize=12)  # Increase font size
-    plt.ylabel("Fitness", fontsize=12)  # Increase font size
-    plt.title(f"Convergence Comparison (Function {funcs[function_id]})", fontsize=14)  # Clear title
+    plt.xlabel("Evaluations", fontsize=12)
+    plt.ylabel("Fitness", fontsize=12)
+    plt.title(f"Convergence Comparison (Function {funcs[function_id]})", fontsize=14)
 
-    plt.yscale("log")  # Use a logarithmic scale for the y-axis
-    plt.grid(True, which="both", linestyle='--', linewidth=0.5)  # Add a grid
+    plt.yscale("log")
+    plt.grid(True, which="both", linestyle='--', linewidth=0.5)
 
-    plt.legend(loc="upper right", fontsize=10)  # Show legend, adjust location
+    plt.legend(loc="upper right", fontsize=10)
 
-    plt.tight_layout()  # Adjust layout to prevent labels from overlapping
+    plt.tight_layout()
 
-    # Saving the plot to a file
     filename = f"comparison_{funcs[function_id]}_dim{dim}_paper_style.png"
-    plt.savefig(filename, dpi=300)  # Saves the combined plot as a high-resolution PNG
+    plt.savefig(filename, dpi=300)
     print(f"Comparison plot saved to {filename}")
 
-    plt.show()  # Display the plot
+    plt.show()
