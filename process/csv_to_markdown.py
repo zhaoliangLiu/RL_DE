@@ -1,9 +1,14 @@
+# csv_to_markdown.py
 import csv
-# 将父目录加入
-import sys
 import os
+import sys
+# 导入配置文件参数
+from config import CSV_TO_MARKDOWN_CSV_FILE
+
+# 将父目录加入
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir)))
-                
+
+
 def csv_to_markdown_scientific_from_file(csv_file_path):
     """
     从 CSV 文件读取数据，并将不包含 "rank" 的数字列格式化为科学计数法后转换为 Markdown 表格。
@@ -49,8 +54,8 @@ def csv_to_markdown_scientific_from_file(csv_file_path):
     except Exception as e:
         return f"发生错误: {e}"
 
-# 获取 CSV 文件路径（直接在这里修改）
-csv_file = r"C:\Users\26804\Desktop\DE_RL\data\compare\10D\best_ranking.csv"
+# 获取 CSV 文件路径（从配置文件读取）
+csv_file = CSV_TO_MARKDOWN_CSV_FILE # 使用配置中的 CSV 文件路径
 
 # 转换为 Markdown 并输出
 markdown_table = csv_to_markdown_scientific_from_file(csv_file)
