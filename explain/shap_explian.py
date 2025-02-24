@@ -7,6 +7,8 @@ import os
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir)))
 import config # 导入配置文件
+import matplotlib.pyplot as plt
+plt.style.use('seaborn-v0_8-whitegrid')    # 定义各算法的颜色（可根据需求调整）
 
 # 加载模型并提取策略网络
 model = PPO.load(config.MODEL_PATH) # 使用配置文件中的模型路径
@@ -23,8 +25,10 @@ def preprocess_data(data_path):
     import pandas as pd
     from sklearn.preprocessing import StandardScaler
 
-    df = pd.read_csv(data_path)
+    # 使用 index_col=0 避免读入 CSV 中的索引列
+    df = pd.read_csv(data_path, index_col=0)
     df = df.sample(n=config.EXPLAIN_SAMPLE, random_state=43)
+    # 确保 action 列被删除后，仅保留模型所需的特征
     features = df.drop(columns=['action'])
     scaler = StandardScaler()
     scaled_features = scaler.fit_transform(features)
@@ -32,8 +36,7 @@ def preprocess_data(data_path):
     return scaled_features, features.columns, scaler
 
 import matplotlib.pyplot as plt
-def shap_analysis():
-    plt.rcParams['font.family'] = 'Times New Roman'
+def shap_analysis(): 
     plt.rcParams['axes.linewidth'] = 1.5
     plt.rcParams['axes.grid'] = True
     plt.rcParams['grid.alpha'] = 0.3
@@ -68,9 +71,9 @@ def shap_analysis():
         plt.xlabel("SHAP value", fontsize=12, fontweight='bold')
         plt.ylabel("Feature", fontsize=12, fontweight='bold')
         plt.tight_layout()
-        if not os.path.exists(os.path.join(config.EXPLAIN_GRAPH_DIR, f'{path}D')): # 使用配置文件中的图形输出路径
-            os.makedirs(os.path.join(config.EXPLAIN_GRAPH_DIR, f'{path}D')) # 使用配置文件中的图形输出路径
-        plt.savefig(os.path.join(config.EXPLAIN_GRAPH_DIR, f'{path}D', f'{path}D_global_importance.png'), # 使用配置文件中的图形输出路径和文件名
+        out_dir = os.path.join(config.EXPLAIN_GRAPH_DIR, f'{path}D', config.PATH_EXPLOIT_DEV)
+        os.makedirs(out_dir, exist_ok=True)
+        plt.savefig(os.path.join(out_dir, f'{path}D_global_importance.png'),
                     dpi=300, bbox_inches='tight')
         plt.close()
 
@@ -106,7 +109,8 @@ def shap_analysis():
 
             plt.grid(True, linestyle='--', alpha=0.3)
             plt.tight_layout()
-            plt.savefig(os.path.join(config.EXPLAIN_GRAPH_DIR, f'{path}D', f'{path}D_dependence_{feature}.png'), # 使用配置文件中的图形输出路径和文件名
+            # 将依赖图保存在维度文件夹下 config.PATH_EXPLOIT_DEV 子文件夹中
+            plt.savefig(os.path.join(out_dir, f'{path}D_dependence_{feature}.png'),
                        dpi=300, bbox_inches='tight')
             plt.close()
 
@@ -125,7 +129,7 @@ def shap_analysis():
         plt.xlabel("mean(|SHAP value|)", fontsize=12, fontweight='bold')
         plt.ylabel("Feature", fontsize=12, fontweight='bold')
         plt.tight_layout()
-        plt.savefig(os.path.join(config.EXPLAIN_GRAPH_DIR, f'{path}D', f'{path}D_importance_ranking.png'), # 使用配置文件中的图形输出路径和文件名
+        plt.savefig(os.path.join(out_dir, f'{path}D_importance_ranking.png'),
                     dpi=300, bbox_inches='tight')
         plt.close()
 
