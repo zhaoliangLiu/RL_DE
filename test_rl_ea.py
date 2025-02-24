@@ -33,8 +33,11 @@ def test_model(dim, function_id, path, model_path=config.MODEL_PATH): # 默认�
         fitness_history.extend(info["fitness"])
         exploit_rates.extend([info["exploit_rate"][-1]] * len(info["fitness"]))
 
-    os.makedirs(os.path.join(config.EXPLOIT_DEV_GRAPH_DIR, f'{path}/{dim}D'), exist_ok=True) # 使用配置文件中的图形输出路径
-    os.makedirs(os.path.join(config.EXPLOIT_DEV_DATA_DIR, f'{path}/{dim}D'), exist_ok=True) # 使用配置文件中的数据输出路径
+    # 创建输出目录：在 "勘探开发" 对应的图形和数据目录下，以 {path}/{dim}D/{config.PATH_EXPLOIT_DEV} 作为文件夹路径
+    data_dir = os.path.join(config.EXPLOIT_DEV_DATA_DIR, f'{path}/{dim}D/{config.PATH_EXPLOIT_DEV}')
+    graph_dir = os.path.join(config.EXPLOIT_DEV_GRAPH_DIR, f'{path}/{dim}D/{config.PATH_EXPLOIT_DEV}')
+    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(graph_dir, exist_ok=True)
 
     plt.figure(figsize=(8, 6), dpi=300)
     ax1 = plt.gca()
@@ -63,7 +66,7 @@ def test_model(dim, function_id, path, model_path=config.MODEL_PATH): # 默认�
               pad=20, fontsize=12, fontweight='bold')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(config.EXPLOIT_DEV_GRAPH_DIR, f'{path}/{dim}D', f'f{function_id}.png'), bbox_inches='tight', dpi=300) # 使用配置文件中的图形输出路径
+    plt.savefig(os.path.join(graph_dir, f'f{function_id}.png'), bbox_inches='tight', dpi=300)
 
     import pandas as pd
     data_dict = {
@@ -73,10 +76,7 @@ def test_model(dim, function_id, path, model_path=config.MODEL_PATH): # 默认�
     }
     df = pd.DataFrame(data_dict)
 
-    if not os.path.exists(os.path.join(config.EXPLOIT_DEV_DATA_DIR, f'{path}/{dim}D')): # 使用配置文件中的数据输出路径
-        os.makedirs(os.path.join(config.EXPLOIT_DEV_DATA_DIR, f'{path}/{dim}D'), exist_ok=True) # 使用配置文件中的数据输出路径
-
-    csv_path = os.path.join(config.EXPLOIT_DEV_DATA_DIR, f'{path}/{dim}D', f'F{function_id}.csv') # 使用配置文件中的数据输出路径和文件名
+    csv_path = os.path.join(data_dir, f'F{function_id}.csv')
     df.to_csv(csv_path, index=False)
     return env.gbest_fitness
 

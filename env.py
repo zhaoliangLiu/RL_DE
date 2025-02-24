@@ -10,11 +10,14 @@ from gymnasium import spaces
 import gym
 import numpy as np
 from gym import spaces
-import scipy.stats as stats
-from opfunu import cec_based
+import scipy.stats as stats 
 import torch
 import config # 导入配置文件
-
+# # 加入父路径
+# import sys
+# import os
+# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir)))
+from cec2017.functions import all_functions
 
 torch.set_num_threads(8)
 torch.set_flush_denormal(True)
@@ -61,35 +64,19 @@ class PSO_Proportional_Env(gym.Env):
         self.reset()
 
     def _create_func_mapping(self):
-        from opfunu import cec_based
-        return {
-            1: cec_based.F12017,    2: cec_based.F22017,
-            3: cec_based.F32017,    4: cec_based.F42017,
-            5: cec_based.F52017,    6: cec_based.F62017,
-            7: cec_based.F72017,    8: cec_based.F82017,
-            9: cec_based.F92017,    10: cec_based.F102017,
-            11: cec_based.F112017,  12: cec_based.F12017,
-            13: cec_based.F132017,  14: cec_based.F142017,
-            15: cec_based.F152017,  16: cec_based.F162017,
-            17: cec_based.F172017,  18: cec_based.F182017,
-            19: cec_based.F192017,  20: cec_based.F202017,
-            21: cec_based.F212017, 22: cec_based.F222017,
-            23: cec_based.F232017, 24: cec_based.F242017,
-            25: cec_based.F252017, 26: cec_based.F262017,
-            27: cec_based.F272017, 28: cec_based.F282017,
-            29: cec_based.F292017
-        }
+       return {i: all_functions[i - 1] for i in config.FUNC_IDS_TEST}
 
     def reset(self):
-        func_class = self.func_mapping[self.fitness_function_id]
-        self.fitness_function = func_class(ndim=self.dim)
+        self.fitness_function = self.func_mapping[self.fitness_function_id]
 
         self.population = np.random.uniform(
             self.x_min, self.x_max,
             (self.population_size, self.dim)
         )
 
-        self.fitness = np.array([self.fitness_function.evaluate(x) for x in self.population])
+        # 原先的适应度计算加偏置，需要扣除偏置
+        bias = self.fitness_function_id * 100
+        self.fitness = self.fitness_function(self.population) - bias
         self.pbest_positions = self.population.copy()
         self.pbest_fitness = self.fitness.copy()
         self.gbest_idx = np.argmin(self.fitness)
@@ -114,14 +101,23 @@ class PSO_Proportional_Env(gym.Env):
         }
 
         self.p_count = 0
+        
+        # 计算初始多样性（种群中心平均距离）
+        center = np.mean(self.population, axis=0)
+        distances = np.linalg.norm(self.population - center, axis=1)
+        self.prev_diversity = np.mean(distances)
+        
+        # Calculate initial diversity (Manhattan distance to population center)
+        center = np.mean(self.population, axis=0)
+        self.prev_diversity = np.mean(np.sum(np.abs(self.population - center), axis=1))
+        
         return self._get_full_state()
 
     def _get_full_state(self):
         center = np.mean(self.population, axis=0)
         dist_center = np.linalg.norm(self.population - center, axis=1)
         dist_gbest = np.linalg.norm(self.population - self.gbest_position, axis=1)
-        if self.gbest_fitness < 0:
-            print(self.gbest_fitness)
+
         features = np.array([
             np.log(1 + np.abs(self.gbest_fitness)),
             np.log(1 + np.mean(self.fitness)),
@@ -138,7 +134,7 @@ class PSO_Proportional_Env(gym.Env):
 
     def _vectorized_mutation(self, p):
         sorted_idx = np.argsort(self.fitness)
-        split_idx = int(self.population_size * p[0])
+        split_idx = int(self.population_size * p[0]) # 划分比例
 
         r = np.random.randint(0, self.memory_size, self.population_size)
         CR = np.clip(stats.norm(loc=self.M_CR[r], scale=0.1).rvs(), 0, 1)
@@ -149,7 +145,7 @@ class PSO_Proportional_Env(gym.Env):
         mutants = np.empty_like(self.population)
 
         if split_idx > 0:
-            best_individuals = sorted_idx[:split_idx]
+            best_individuals = sorted_idx[:split_idx] # 开发个体
             r1 = rand_indices[best_individuals, 0]
             r2 = rand_indices[best_individuals, 1]
             F_best = F[best_individuals, np.newaxis]
@@ -183,9 +179,11 @@ class PSO_Proportional_Env(gym.Env):
 
         intermediate_fitness = []
         current_gbest = self.gbest_fitness
+        bias = self.fitness_function_id * 100
 
         for i in range(self.population_size):
-            trial_fitness = self.fitness_function.evaluate(trials[i])
+            # 从 fitness 函数返回值中减去偏置项
+            trial_fitness = self.fitness_function(np.array([trials[i]]))[0] - bias
 
             if trial_fitness < self.fitness[i]:
                 self.population[i] = trials[i]
@@ -221,21 +219,31 @@ class PSO_Proportional_Env(gym.Env):
 
         intermediate_fitness = self.update_particles(action)
 
+        # Calculate current diversity using Manhattan distance
+        center = np.mean(self.population, axis=0)
+        current_diversity = np.mean(np.sum(np.abs(self.population - center), axis=1))
+        
         progress = self.cur_iter / self.max_iter
         fitness_weight = (1 - np.cos(np.pi * progress)) / 2.0
         diversity_weight = 1 - fitness_weight
 
-
-        entropy = stats.entropy(np.histogram(self.population, bins=20)[0])
-
+        # Calculate fitness reward
         fitness_reward = (old_gbest - self.gbest_fitness) / (old_gbest + 1e-8)
-
-        reward = fitness_weight * fitness_reward + diversity_weight * entropy
-
-        if self.gbest_fitness < old_gbest:
-            self.not_update_count = 0
-        else:
+        
+        # Calculate diversity reward
+        diversity_reward = (current_diversity - self.prev_diversity) / (self.prev_diversity + 1e-8)
+        
+        # Update previous diversity for next iteration
+        self.prev_diversity = current_diversity
+        
+        # Combine rewards and add penalty for no improvement
+        reward = fitness_weight * fitness_reward + diversity_weight * diversity_reward
+        
+        if self.gbest_fitness >= old_gbest:
+            reward -= 0.1  # Penalty for no improvement
             self.not_update_count += 1
+        else:
+            self.not_update_count = 0
 
         self.cur_iter += 1
         done = self.cur_iter >= self.max_iter
@@ -245,14 +253,14 @@ class PSO_Proportional_Env(gym.Env):
         if done:
             print(f"Function ID: {self.fitness_function_id}, Best Fitness: {self.gbest_fitness}, p_count: {self.p_count}")
             if not is_test:
-                self.fitness_function_id = (self.fitness_function_id) % 29 + 1
-
+                self.fitness_function_id = (self.fitness_function_id) % 30 + 1
 
         self.info["fitness"] = intermediate_fitness
         self.info["fitness_history"].append(self.gbest_fitness)
         self.info["reward"] = reward
         self.info["exploit_rate"].append(action[0])
 
+        # 更新这里不再使用 prev_diversity
         return self._get_full_state(), reward, done, self.info
 
     def render(self, mode='human'):
@@ -268,7 +276,7 @@ if __name__ == "__main__":
     import matplotlib as mpl
     import os
 
-    plt.rcParams['font.family'] = 'Times New Roman'
+    # plt.rcParams['font.family'] = 'Times New Roman'
     plt.rcParams['axes.linewidth'] = 1.5
 
     dim = config.DIMENSION # 使用配置文件中的维度

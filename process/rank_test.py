@@ -4,15 +4,16 @@ import numpy as np
 from scipy.stats import friedmanchisquare
 import scikit_posthocs as sp
 import os
-
+# 加入父路径
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 # 导入配置文件参数
-from config import COMPARE_DATA_DIR, SIGNIFICANCE_LEVEL, RANK_TEST_METRICS, DIM_10 # 导入显著性水平和指标列表, 导入维度常数
+from config import COMPARE_DATA_DIR, DIM_TEST, PATH_EXPLOIT_DEV # 导入显著性水平和指标列表, 导入维度常数
 
 # 配置参数 (从配置文件读取)
-dir_path = os.path.join(COMPARE_DATA_DIR, str(DIM_10) + 'D') # 使用配置中的数据目录和维度
-significance_level = SIGNIFICANCE_LEVEL
-metrics = RANK_TEST_METRICS
-
+dir_path = os.path.join(COMPARE_DATA_DIR, str(DIM_TEST) + 'D', f'{PATH_EXPLOIT_DEV}') # 使用配置中的数据目录和维度
+significance_level = 0.01 
+metrics = ['avg', 'best', 'worst', 'median', 'var'] 
 def process_metric(metric):
     # 读取排名数据
     ranking_path = os.path.join(dir_path, f'{metric}_ranking.csv')
@@ -42,12 +43,7 @@ def process_metric(metric):
     for alg, rank in sorted(avg_ranks.items(), key=lambda x: x[1]):
         print(f"{alg}: {rank:.4f}")
 
-    # 如果Friedman检验显著，执行并打印Nemenyi检验结果
-    if p_value < significance_level:
-        print("\nNemenyi后续检验 P值矩阵:")
-        nemenyi_result = sp.posthoc_nemenyi_friedman(data_matrix)
-        print(nemenyi_result.round(4))
-
+    
 # 处理所有指标
 for metric in metrics:
     process_metric(metric)
